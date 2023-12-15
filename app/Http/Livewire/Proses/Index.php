@@ -30,103 +30,79 @@ class Index extends Component
 		$kriterias = Kriteria::orderBy('kode')->get('type')->toArray();
 		// dd($kriterias);
 
-		// penentuan matriks keputusan
-		$Xij = [];
-		foreach ($alternatifs as $ka => $alt) {
-			foreach ($alt->kriteria as $kk => $krit) {
-				$Xij[$ka][$kk] = $krit->pivot->nilai;
-			}
-		}
+		
+		// Langkah 1: Membentuk matriks keputusan dari nilai kriteria untuk setiap alternatif
+$Xij = [];
+foreach ($alternatifs as $ka => $alt) {
+    foreach ($alt->kriteria as $kk => $krit) {
+        $Xij[$ka][$kk] = $krit->pivot->nilai;
+    }
+}
 
-		// normalisasi matriks keputusan
-		$rows = count($Xij);
-		$cols = count($Xij[0]);
-		$Nij = [];
-		for ($j = 0; $j < $cols; $j++) {
-			$xj = [];
-			for ($i = 0; $i < $rows; $i++) {
-				$xj[] = $Xij[$i][$j];
-			}
+$rows = count($Xij);
+$cols = count($Xij[0]);
 
-			$divisor = max($xj);
-			$cost = false;
-			if ($kriterias[$j]['type'] == false) {
-				$cost = true;
-				$divisor = min($xj);
-			}
+// Langkah 2: Normalisasi matriks keputusan
+$Nij = [];
+for ($j = 0; $j < $cols; $j++) {
+    $xj = [];
+    for ($i = 0; $i < $rows; $i++) {
+        $xj[] = $Xij[$i][$j];
+    }
 
-			foreach ($xj as $kj => $x) {
-				$Nij[$kj][$j] = $cost ? ($divisor / $x) : ($x / $divisor);
-			}
-		}
+    $divisor = max($xj);
+    $cost = false;
+    if ($kriterias[$j]['type'] == false) {
+        $cost = true;
+        $divisor = min($xj);
+    }
 
-		// menjumlahkan elemen tiap kolom matriks
-		$EN = [];
-		for ($i = 0; $i < $cols; $i++) {
-			$jumlah = 0;
-			for ($j = 0; $j < $rows; $j++) {
-				$jumlah += $Nij[$j][$i];
-			}
-			$EN[] = $jumlah;
-		}
+    foreach ($xj as $kj => $x) {
+        $Nij[$kj][$j] = $cost ? ($divisor / $x) : ($x / $divisor);
+    }
+}
 
-		// hitung nilai mean
-		$N = [];
-		foreach ($EN as $e) {
-			$N[] = $e / $rows;
-		}
+// Langkah 3: Menghitung nilai rata-rata dari masing-masing kolom
+$EN = array_map('array_sum', $Nij);
+$N = array_map(function ($e) use ($rows) {
+    return $e / $rows;
+}, $EN);
 
-		// hitung variasi preferensi
-		$Tj = [];
-		for ($i = 0; $i < $cols; $i++) {
-			for ($j = 0; $j < $rows; $j++) {
-				$Tj[$j][$i] = pow($Nij[$j][$i] - $N[$i], 2);
-			}
-		}
+// Langkah 4: Menghitung variasi preferensi
+$Tj = [];
+for ($i = 0; $i < $cols; $i++) {
+    for ($j = 0; $j < $rows; $j++) {
+        $Tj[$i][$j] = pow($Nij[$j][$i] - $N[$i], 2);
+    }
+}
 
-		// hitung total tiap kriteria
-		$TTj = [];
-		for ($i = 0; $i < $cols; $i++) {
-			$jumlah = 0;
-			for ($j = 0; $j < $rows; $j++) {
-				$jumlah += $Tj[$j][$i];
-			}
-			$TTj[] = $jumlah;
-		}
+// Langkah 5: Menghitung total variasi preferensi tiap kriteria
+$TTj = array_map('array_sum', $Tj);
 
-		// menentukan penyimpangan nilai preferensi
-		$Omega = [];
-		foreach ($TTj as  $ttj) {
-			$Omega[] = 1 - $ttj;
-		}
+// Langkah 6: Menentukan penyimpangan nilai preferensi
+$Omega = array_map(fn ($ttj) => 1 - $ttj, $TTj);
+$EOmega = array_sum($Omega);
 
-		// total penyimpangan nilai preferensi
-		$EOmega = array_sum($Omega);
+// Langkah 7: Menghitung bobot kriteria
+$Wj = array_map(fn ($o) => $o / $EOmega, $Omega);
 
-		// menghitung kriteria bobot
-		$Wj = [];
-		foreach ($Omega as $o) {
-			$Wj[] = $o / $EOmega;
-		}
+// Langkah 8: Menghitung PSI untuk setiap alternatif
+$ThetaI = [];
+for ($i = 0; $i < $cols; $i++) {
+    for ($j = 0; $j < $rows; $j++) {
+        $ThetaI[$j][$i] = $Nij[$j][$i] * $Wj[$i];
+    }
+}
 
-		// menghitung PSI
-		$ThetaI = [];
-		for ($i = 0; $i < $cols; $i++) {
-			for ($j = 0; $j < $rows; $j++) {
-				$ThetaI[$j][$i] = $Nij[$j][$i] * $Wj[$i];
-			}
-		}
+// Langkah 9: Penjumlahan hasil PSI untuk setiap alternatif
+$TThetaI = array_map('array_sum', $ThetaI);
 
-		// penjumlahan tiap baris proses sebelumnya
-		$TThetaI = [];
-		foreach ($ThetaI as $theta) {
-			$TThetaI[] = array_sum($theta);
-		}
+// Langkah 10: Menetapkan nilai PSI pada setiap alternatif
+foreach ($alternatifs as $key => $alternatif) {
+    $alternatif->nilai = round($TThetaI[$key], 4);
+}
 
-		foreach ($alternatifs as $key => $alternatif) {
-			$alternatif->nilai = round($TThetaI[$key], 4);
-		}
+return $alternatifs;
 
-		return $alternatifs;
 	}
 }
